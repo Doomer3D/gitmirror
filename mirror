@@ -1,0 +1,141 @@
+#!/bin/bash
+
+# Для подключения бота Telegram, положите рядом telegram:
+# https://github.com/fabianonline/telegram.sh
+
+VERSION="0.1"
+
+# реквизиты исходного Gitlab
+SOURCE_REPO=""
+SOURCE_ACCESS_USER=""
+SOURCE_ACCESS_TOKEN=""
+SOURCE_ORIGIN="source"
+
+# реквизиты целевого Gitlab
+TARGET_REPO=""
+TARGET_ACCESS_USER=""
+TARGET_ACCESS_TOKEN=""
+TARGET_ORIGIN="target"
+
+# обновляемая ветка
+BRANCH=""
+
+# название проекта и путь к папке с репозиторием
+PROJECT="Project Name"
+REPO_PATH="$(pwd)/repo"
+
+# разбираем аргументы программы
+options=$(getopt -l "setup,info,push,version,help" -o "sipvh" -a -- "$@")
+eval set -- "$options"
+
+# показать версию скрипта
+version() {
+    echo "$0 v$VERSION by Doomer3D"
+}
+
+# справка по скрипту
+help() {
+    version
+    echo "Использование: $0 [команда]"
+    echo
+    echo "Команда:"
+    echo "    -s, --setup           Выполнить первоначальную настройку репозитория"
+    echo "    -i, --info            Показать лог последнего коммита"
+    echo "    -p, --push            Выполнить отправку в целевой репозиторий"
+    echo "    -v, --version         Отобразить версию скрипта"
+    echo "    -h, --help            Отобразить эту справку"
+    echo
+    echo "При вызове без опций происходит проверка исходного репозитория."
+    echo "При наличии изменений, они загружаются и отправляются в целевой репозиторий."
+    echo
+}
+
+# установка репозитория
+setup() {
+    echo "Установка репозитория"
+    echo "Путь: $REPO_PATH"
+    if [[ -d $REPO_PATH ]]; then
+        echo "Каталог уже существует, установка не требуется"
+    else
+        echo "Каталог $REPO_PATH не существует"
+        git clone -b $BRANCH -o $SOURCE_ORIGIN "https://$SOURCE_ACCESS_USER:$SOURCE_ACCESS_TOKEN@$SOURCE_REPO" $REPO_PATH
+        pushd $REPO_PATH
+        git remote add $TARGET_ORIGIN "https://$TARGET_ACCESS_USER:$TARGET_ACCESS_TOKEN@$TARGET_REPO"
+        popd
+    fi
+}
+
+# загрузить исходный репозиторий
+update() {
+    echo "Проверка исходного репозитория..."
+    git remote update $SOURCE_ORIGIN && git status -uno | grep -q 'Your branch is behind' && changed=1
+    if [[ $changed = 1 ]]; then
+        echo "Получаем изменения"
+        git pull --ff $SOURCE_ORIGIN
+        git log -1 --oneline
+        IFS="|"; read commit_author commit_subject <<< "$(git log -1 --pretty=format:"%an|%s")"
+        return 0
+    else
+        echo "Загрузка не требуется"
+        return 1
+    fi
+}
+
+# показать лог последнего коммита
+info() {
+    git log -1
+}
+
+# обновить целевой репозиторий
+push() {
+    echo "Обновляем целевой репозиторий..."
+    git push $TARGET_ORIGIN
+}
+
+# отправить уведомление в Telegram
+sendMessage() {
+    echo "Отправляем уведомление"
+    sh telegram -H "<b>$PROJECT</b>"$'\n'"Ветка $BRANCH была обновлена, автор $commit_author"$'\n\n'"<i>$commit_subject</i>"
+}
+
+while true; do
+    case $1 in
+        -s|--setup)
+            setup
+            exit 0
+            ;;
+        -i|--info)
+            pushd $REPO_PATH
+            info
+            popd
+            exit 0
+            ;;
+        -p|--push)
+            pushd $REPO_PATH
+            push
+            popd
+            exit 0
+            ;;
+        -v|--version)
+            version
+            exit 0
+            ;;
+        -h|--help)
+            help
+            exit 0
+            ;;
+        --)
+            shift
+            break;;
+    esac
+    shift
+done
+
+pushd $REPO_PATH
+update && push && pushed=1
+popd
+
+if [[ $pushed = 1 ]]; then
+    # отправляем уведомление, если изменения были залиты в git
+    sendMessage
+fi
